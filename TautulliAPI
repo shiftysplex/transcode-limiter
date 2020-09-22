@@ -1,0 +1,103 @@
+import org.apache.http.HttpResponse;
+import org.apache.http.client.config.RequestConfig;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClientBuilder;
+import org.apache.http.util.EntityUtils;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.IOException;
+import java.net.http.HttpConnectTimeoutException;
+import java.util.List;
+
+public class TautulliAPI {
+    public static JSONObject getRequest(String getURL) throws IOException {
+        RequestConfig requestConfig = RequestConfig.custom().setConnectTimeout(5000).build();
+        try(CloseableHttpClient httpClient = HttpClientBuilder.create().setDefaultRequestConfig(requestConfig).build()){
+            HttpGet request = new HttpGet(getURL);
+            request.addHeader("content-type", "application/json");
+            HttpResponse result = httpClient.execute(request);
+            String json = EntityUtils.toString(result.getEntity(), "UTF-8");
+            JSONObject jsonArr = new JSONObject(json);
+            return jsonArr;
+        }
+        catch (HttpConnectTimeoutException e) {
+            System.out.println(StreamLimiter.RED + "Connection Timed Out!");
+            return null;
+        }
+    }
+
+    public static JSONArray getSessions() throws IOException {
+        try {
+            String URL = "http://" +
+                    StreamLimiter.tautulliIP + ":" +
+                    StreamLimiter.tautulliPORT +
+                    "/api/v2?apikey=" +
+                    StreamLimiter.tautulliAPI +
+                    "&cmd=get_activity";
+            System.out.println(StreamLimiter.CYAN + "-=-=- Retrieving data from Tautulli API -=-=-");
+            JSONObject value = getRequest(URL);
+            return value.getJSONObject("response").getJSONObject("data").getJSONArray("sessions");
+
+        } catch (Exception e) {
+            System.out.println(StreamLimiter.RED + "An error occurred gathering sessions from Tautulli: " + e.getMessage());
+        }
+        return null;
+    }
+
+    public static void worker() throws Exception {
+        List<String> usernames = getProhibitedUsers();
+        System.out.println(StreamLimiter.CYAN + "Restricted Users: " + usernames.toString());
+        try {
+            JSONArray sessions = getSessions();
+            if (sessions.length() > 0) {
+                for (int i = 0; i < sessions.length(); i++) {
+                    JSONObject stream = sessions.getJSONObject(i);
+                    if (stream.has("username")) {
+                        if (usernames.contains(stream.getString("username"))) { // user who is streaming is in the list of limited usernames
+                            System.out.println(StreamLimiter.YELLOW + "<-- Restricted stream -->" +
+                                    StreamLimiter.WHITE + "\nUser: " + stream.getString("username") +
+                                    "\nStream Type: " + stream.getString("transcode_decision") +
+                                    "\nSession ID: " + stream.getString("session_id"));
+                            if (stream.has("transcode_decision") && stream.getString("transcode_decision").equals("transcode")) { // if user is transcoding
+                                System.out.println(StreamLimiter.YELLOW + "Restricted user " + stream.getString("username") + " is transcoding. Killing session.");
+                                killStream(stream.getString("session_id"));
+                            }
+                        }
+                    }
+                }
+            }
+            System.out.println(StreamLimiter.WHITE + "Finished checking " + (sessions.length()) + " streams.");
+        } catch (Exception e) {
+            System.out.println(StreamLimiter.RED + "An error occurred parsing sessions: " + e.getMessage());
+        }
+    }
+
+    public static List<String> getProhibitedUsers() throws Exception {
+        if (!BotWriter.exists("usernames.txt")) {
+            System.out.println(StreamLimiter.YELLOW + "Couldn't find an existing usernames.txt, creating one now.");
+            BotWriter.create("usernames.txt");
+        }
+        return BotWriter.readText("usernames.txt");
+    }
+
+    public static boolean killStream(String session_id) throws Exception {
+        String URL = "http://" +
+                StreamLimiter.tautulliIP + ":" +
+                StreamLimiter.tautulliPORT +
+                "/api/v2?apikey=" +
+                StreamLimiter.tautulliAPI +
+                "&cmd=terminate_session" +
+                "&session_id=" + session_id +
+                "&message=" + StreamLimiter.killStreamMessage;
+        JSONObject response = getRequest(URL);
+        if (response.getJSONObject("response").getString("result").equals("success")) {
+            System.out.println(StreamLimiter.GREEN + "Killed stream successfully.");
+            return true;
+        }
+        
+        return false;
+    }
+
+}
